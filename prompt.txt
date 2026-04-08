@@ -1,522 +1,115 @@
-هذا هو "نمط التدريب المحلي الخاص" (Local Private Training) - الحل الأمثل للخصوصية والتخصص. إليك المخطط الكامل:
-1. معالجة الملفات (Document Ingestion Pipeline)
-1.1 مستخرج المحتوى الذكي (Smart Document Parser)
-Python
+رأيت جميع الملفات. هنا التعديلات الحرجة التي يجب تطبيقها فوراً:
+🔴 أولوية قصوى (Critical Fixes)
+1. memory_manager.cpp - الـ RAM Guard مفقود!
+المشكلة: load_blocking و decompress_worker لا يتحققان من MAX_RAM_USAGE قبل الإضافة!
+الإصلاح المطلوب:
+cpp
 Copy
-# training/local_file_processor.py
-import fitz  # PyMuPDF for PDF
-import docx
-import pandas as pd
-from pathlib import Path
-import re
-from typing import List, Dict
-import pytesseract  # OCR للصور
-from PIL import Image
-import io
+// في load_blocking()، أضف هذا قبل إضافة الخبير:
+while (current_ram_usage + expert_size > MAX_RAM_USAGE && !lru_list.empty()) {
+    evict_lru_if_needed(); // طرد فوري إذا كانت الذاكرة ممتلئة
+}
 
-class LocalDocumentProcessor:
-    """
-    يقرأ أي ملف: PDF, TXT, DOCX, CSV, حتى الصور الممسوحة
-    """
-    
-    def __init__(self, ocr_enabled: bool = True):
-        self.ocr_enabled = ocr_enabled
-        self.supported_formats = ['.pdf', '.txt', '.docx', '.md', '.csv', '.json']
-        
-    def process_file(self, file_path: Path) -> Dict:
-        """
-        يعالج ملفاً واحداً ويرجع محتوى منظم
-        """
-        suffix = file_path.suffix.lower()
-        
-        if suffix == '.pdf':
-            return self._process_pdf(file_path)
-        elif suffix == '.txt' or suffix == '.md':
-            return self._process_text(file_path)
-        elif suffix == '.docx':
-            return self._process_docx(file_path)
-        elif suffix == '.csv':
-            return self._process_csv(file_path)
-        else:
-            raise ValueError(f"Unsupported format: {suffix}")
-    
-    def _process_pdf(self, path: Path) -> Dict:
-        """
-        يستخرج النص من PDF مع الحفاظ على التركيب (Layout)
-        """
-        doc = fitz.open(path)
-        pages = []
-        
-        for page_num, page in enumerate(doc):
-            # استخراج النص المباشر
-            text = page.get_text()
-            
-            # إذا كان النص قليلاً (صورة ممسوحة)، استخدم OCR
-            if len(text.strip()) < 100 and self.ocr_enabled:
-                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom لدقة أعلى
-                img = Image.open(io.BytesIO(pix.tobytes()))
-                text = pytesseract.image_to_string(img, lang='ara+eng')
-            
-            pages.append({
-                'page': page_num + 1,
-                'text': text,
-                'images': []  # يمكن استخراج الصور أيضاً
-            })
-            
-        return {
-            'source': str(path),
-            'type': 'pdf',
-            'pages': pages,
-            'metadata': doc.metadata
+// إذا كان الخبير الجديد أكبر من الحد الأقصى أصلاً:
+if (expert_size > MAX_RAM_USAGE) {
+    std::cerr << "Expert too large for RAM limit!" << std::endl;
+    return nullptr;
+}
+2. router.h - مصفوفة ثابتة الحجم (50000) قاتلة!
+cpp
+Copy
+// ❌ خطأ: هذا يستهلك 25.6 MB دائماً حتى لو كان لديك 100 خبير فقط!
+alignas(64) float centroids_linear[50000][128]; 
+
+// ✅ الحل: استخدم vector ديناميكي
+std::vector<std::array<float, 128>> centroids_linear;
+// ثم reserve(50000) عند البناء
+لماذا؟ إذا شغلت النظام على جهاز بـ 1GB RAM، الـ 25MB هذه قد تكون قاتلة.
+3. async_loader.cpp - الـ Threads نائمة!
+المشكلة: io_loop و decomp_loop يستخدمان sleep_for (= بطء)
+الإصلاح:
+cpp
+Copy
+// ❌ بطيء:
+std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+// ✅ سريع (Busy waiting مع yield):
+while (running.load()) {
+    if (load_queue.dequeue(expert_id, ticket)) {
+        process(expert_id);
+    } else {
+        std::this_thread::yield(); // سلم الـ CPU فوراً
+    }
+}
+🟡 تحسينات متوسطة (Important Improvements)
+4. router.cpp - الـ Search يحتاج Cache
+أضف هذا في search_nearest:
+cpp
+Copy
+// قبل البحث، تحقق من الـ RouterCache
+RouterCache cache;
+std::vector<uint32_t> cached_result;
+if (cache.lookup(query_vec, cached_result)) {
+    if (confidence) *confidence = 0.95f; // ثقة عالية للـ Cache
+    return cached_result;
+}
+
+// ... بعد البحث ...
+cache.store(query_vec, result);
+5. context_protocol.h - الترجمة وهمية!
+cpp
+Copy
+// ❌ هذا لا يفعل شيئاً:
+if (from != to) {
+    output.intent[i] *= 0.95f; // مجرد ضرب في 0.95!
+}
+
+// ✅ يجب إضافة مصفوفات الترجمة المدربة:
+class InterlinguaTranslator {
+private:
+    // مصفوفات التحويل بين المجالات (يتم تدريبها مرة واحدة)
+    std::array<std::array<float, 128>, 128> medical_to_legal;
+    std::array<std::array<float, 128>, 128> physics_to_math;
+    // ... إلخ
+};
+6. asm_format.h - CRC32 غير منفذ!
+cpp
+Copy
+// يجب إضافة حساب الـ Checksum:
+static uint64_t calculate_crc32(const uint8_t* data, size_t size) {
+    // استخدام zlib crc32 أو implementation خاص
+    return crc32_z(0L, data, size);
+}
+🟢 تحسينات أداء (Performance Boosts)
+7. memory_manager - Prefetching مفقود
+أضف:
+cpp
+Copy
+void prefetch_experts(const std::vector<std::string>& expert_ids) {
+    // تحميل في الخلفية قبل الحاجة
+    for (const auto& id : expert_ids) {
+        if (!get_if_available(id)) {
+            request_load_async(id); // بدون انتظار
         }
-    
-    def _process_docx(self, path: Path) -> Dict:
-        """
-        يستخرج النص مع الحفاظ على العناوين والقوائم
-        """
-        doc = docx.Document(path)
-        paragraphs = []
-        
-        for para in doc.paragraphs:
-            if para.text.strip():
-                # تحديد نوع الفقرة (عنوان، نص عادي، قائمة)
-                style = para.style.name if para.style else 'Normal'
-                paragraphs.append({
-                    'text': para.text,
-                    'style': style,
-                    'level': self._get_heading_level(style)
-                })
-                
-        return {
-            'source': str(path),
-            'type': 'docx',
-            'paragraphs': paragraphs
-        }
-    
-    def _get_heading_level(self, style_name: str) -> int:
-        """
-        يحدد مستوى العنوان (Heading 1, 2, 3) للمحافظة على الهيكل
-        """
-        if 'Heading 1' in style_name or 'عنوان 1' in style_name:
-            return 1
-        elif 'Heading 2' in style_name or 'عنوان 2' in style_name:
-            return 2
-        elif 'Heading 3' in style_name:
-            return 3
-        return 0
-1.2 التقطيع الذكي (Semantic Chunking)
-Python
+    }
+}
+8. router - SIMD محسّن أكثر
+cpp
 Copy
-# training/chunking_engine.py
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-import numpy as np
-from sentence_transformers import SentenceTransformer
-
-class ExpertChunkingStrategy:
-    """
-    يقطع المستندات إلى أجزاء مناسبة للخبراء المتخصصين
-    """
+// إضافة Prefetching للـ Centroids القادمين:
+inline float avx2_distance(const float* a, const float* b) {
+    // Prefetch الـ Next Cache Line
+    _mm_prefetch(reinterpret_cast<const char*>(b + 128), _MM_HINT_T0);
     
-    def __init__(self, chunk_size: int = 512, overlap: int = 50):
-        self.chunk_size = chunk_size
-        self.overlap = overlap
-        self.embedder = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
-        
-    def create_semantic_chunks(self, documents: List[Dict]) -> List[Dict]:
-        """
-        يقطع بناءً على المعنى، لا فقط على الحجم
-        """
-        chunks = []
-        
-        for doc in documents:
-            text = self._extract_full_text(doc)
-            
-            # 1. تقسيم حسب العناوين أولاً (Hierarchical Splitting)
-            sections = self._split_by_headings(text)
-            
-            for section in sections:
-                # 2. إذا كانت القسم كبير، نقسمه semantic
-                if len(section['text']) > self.chunk_size * 2:
-                    sub_chunks = self._semantic_split(section['text'])
-                    chunks.extend(sub_chunks)
-                else:
-                    chunks.append({
-                        'text': section['text'],
-                        'heading': section['heading'],
-                        'source': doc['source'],
-                        'domain': self._detect_domain(section['text'])
-                    })
-                    
-        return chunks
-    
-    def _semantic_split(self, text: str) -> List[Dict]:
-        """
-        يقطع عند تغير الموضوع (Topic Shift)
-        """
-        # تقسيم أولي إلى جمل
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        
-        chunks = []
-        current_chunk = []
-        current_tokens = 0
-        
-        for sent in sentences:
-            sent_tokens = len(sent.split())
-            
-            if current_tokens + sent_tokens > self.chunk_size:
-                # فحص: هل الجملة التالية تكمل الفكرة؟ إذا نعم، أضفها
-                if current_chunk and self._is_continuation(current_chunk[-1], sent):
-                    current_chunk.append(sent)
-                else:
-                    chunks.append({
-                        'text': ' '.join(current_chunk),
-                        'token_count': current_tokens
-                    })
-                    current_chunk = [sent]
-                    current_tokens = sent_tokens
-            else:
-                current_chunk.append(sent)
-                current_tokens += sent_tokens
-                
-        if current_chunk:
-            chunks.append({
-                'text': ' '.join(current_chunk),
-                'token_count': current_tokens
-            })
-            
-        return chunks
-    
-    def _is_continuation(self, prev_sent: str, curr_sent: str) -> bool:
-        """
-        يحدد إذا كانت الجملة الحالية تكمل السابقة ( coreference resolution بسيط)
-        """
-        # كلمات الربط
-        continuation_markers = ['هذا', 'هذه', 'ذلك', 'التي', 'الذي', 'كذلك', 'أيضاً', 'لذلك']
-        
-        curr_start = curr_sent.split()[0] if curr_sent.split() else ""
-        return any(marker in curr_start for marker in continuation_markers)
-    
-    def _detect_domain(self, text: str) -> str:
-        """
-        يكتشف المجال تلقائياً (طب، قانون، برمجة...)
-        """
-        # كلمات مفتاحية بسيطة للتصنيف
-        domains = {
-            'medical': ['مريض', 'دواء', 'جراحة', 'علاج', 'طبيب', 'diagnosis'],
-            'legal': ['قانون', 'محكمة', 'عقد', 'دعوى', 'قاضي', 'constitution'],
-            'programming': ['code', 'function', 'bug', 'python', 'برمجة', 'دالة'],
-            'science': ['فيزياء', 'كيمياء', 'تجربة', 'نظرية', 'physics']
-        }
-        
-        text_lower = text.lower()
-        scores = {}
-        for domain, keywords in domains.items():
-            scores[domain] = sum(1 for kw in keywords if kw in text_lower)
-            
-        return max(scores, key=scores.get) if max(scores.values()) > 0 else 'general'
-2. التدريب المحلي (Local Training Loop)
-2.1 تدريب بدون GPT-4 (Self-Supervised)
-Python
-Copy
-# training/local_trainer.py
-import torch
-from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
-from peft import LoraConfig, get_peft_model, TaskType
-import shutil
-
-class LocalFileTrainer:
-    """
-    يدرب الخبراء على ملفاتك المحلية بدون الاتصال بالإنترنت
-    """
-    
-    def __init__(self, base_model_path: str = "microsoft/DialoGPT-medium"):
-        """
-        base_model_path: نموذج أساسي مفتوح (مثل GPT-2, Llama, أو نموذج عربي مثل AraGPT)
-        """
-        self.tokenizer = AutoTokenizer.from_pretrained(base_model_path)
-        self.base_model = AutoModelForCausalLM.from_pretrained(
-            base_model_path,
-            load_in_8bit=True,  # لتوفير VRAM
-            device_map='auto'
-        )
-        
-    def prepare_dataset(self, chunks: List[Dict]) -> Dataset:
-        """
-        يحول النصوص إلى صيغة تدريب (Next Token Prediction)
-        """
-        formatted_texts = []
-        
-        for chunk in chunks:
-            # صيغة: السياق → الاستمرار
-            text = chunk['text']
-            
-            # إضافة Metadata كـ Prefix (يساعد الخبير على معرفة مصدر معلوماته)
-            domain_tag = f"[{chunk['domain'].upper()}]"
-            source_tag = f"<source>{chunk['source']}</source>"
-            
-            formatted = f"{domain_tag}\n{source_tag}\n{text}"
-            formatted_texts.append(formatted)
-            
-        return TextDataset(formatted_texts, self.tokenizer)
-    
-    def train_expert(self, chunks: List[Dict], expert_id: str, output_dir: str):
-        """
-        يدرب خبيراً واحداً على مجموعة من الـ Chunks
-        """
-        dataset = self.prepare_dataset(chunks)
-        
-        # إعداد LoRA (Low-Rank Adaptation) - يدرب 1% فقط من المعلمات!
-        lora_config = LoraConfig(
-            r=16,  # rank
-            lora_alpha=32,
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-            lora_dropout=0.05,
-            bias="none",
-            task_type=TaskType.CAUSAL_LM
-        )
-        
-        model = get_peft_model(self.base_model, lora_config)
-        model.print_trainable_parameters()  # يطبع: trainable params: ~10M من 1B
-        
-        # إعدادات التدريب
-        training_args = TrainingArguments(
-            output_dir=f"{output_dir}/expert_{expert_id}",
-            num_train_epochs=3,
-            per_device_train_batch_size=4,
-            gradient_accumulation_steps=4,
-            learning_rate=2e-4,
-            save_steps=100,
-            logging_steps=10,
-            fp16=True,  # دقة منخفضة لتسريع التدريب
-            optim="adamw_torch",
-        )
-        
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=dataset,
-            data_collator=lambda x: {'input_ids': torch.stack([i['input_ids'] for i in x]),
-                                   'attention_mask': torch.stack([i['attention_mask'] for i in x]),
-                                   'labels': torch.stack([i['input_ids'] for i in x])}
-        )
-        
-        trainer.train()
-        
-        # حفظ النموذج المدرب (LoRA adapters فقط - صغير جداً ~20MB)
-        model.save_pretrained(f"{output_dir}/expert_{expert_id}")
-        
-        return f"{output_dir}/expert_{expert_id}"
-
-class TextDataset(Dataset):
-    def __init__(self, texts: List[str], tokenizer, max_length: int = 512):
-        self.encodings = tokenizer(
-            texts,
-            truncation=True,
-            padding=True,
-            max_length=max_length,
-            return_tensors='pt'
-        )
-        
-    def __getitem__(self, idx):
-        return {key: val[idx] for key, val in self.encodings.items()}
-        
-    def __len__(self):
-        return len(self.encodings['input_ids'])
-2.2 استخدام LLM محلي كـ Teacher (بديل GPT-4)
-Python
-Copy
-# training/local_teacher.py
-from transformers import pipeline
-import torch
-
-class LocalTeacherModel:
-    """
-    إذا كان لديك GPU قوي، استخدم نموذجاً محلياً كبيراً (13B-70B) كـ Teacher
-    للتقطير إلى خبراء صغار (1B-2B)
-    """
-    
-    def __init__(self, model_path: str = "TheBloke/Llama-2-13B-GPTQ"):
-        """
-        نموذج مضغوط (GPTQ أو AWQ) يعمل على GPU واحد
-        """
-        self.generator = pipeline(
-            "text-generation",
-            model=model_path,
-            model_kwargs={"torch_dtype": torch.float16, "load_in_4bit": True},
-            device_map="auto",
-        )
-        
-    def generate_training_pairs(self, chunks: List[Dict]) -> List[Dict]:
-        """
-        يولد (سؤال، إجابة) من كل Chunk للتدريب Supervised
-        """
-        training_pairs = []
-        
-        for chunk in chunks:
-            context = chunk['text']
-            
-            # نولد أسئلة محتملة من هذا النص
-            prompt = f"Based on this text, generate 3 questions and their answers:\n\nText: {context}\n\nQuestions:"
-            
-            response = self.generator(
-                prompt,
-                max_new_tokens=200,
-                temperature=0.7,
-                do_sample=True
-            )[0]['generated_text']
-            
-            # parsing الـ QA pairs من الـ response
-            qa_pairs = self._parse_qa(response)
-            training_pairs.extend(qa_pairs)
-            
-        return training_pairs
-    
-    def _parse_qa(self, text: str) -> List[Dict]:
-        """
-        يستخرج الأسئلة والأجوبة من النص المولد
-        """
-        pairs = []
-        lines = text.split('\n')
-        
-        current_q = None
-        for line in lines:
-            if line.strip().startswith('Q') or '؟' in line:
-                current_q = line.strip()
-            elif line.strip().startswith('A') or line.strip().startswith('Answer'):
-                if current_q:
-                    pairs.append({
-                        'input': current_q,
-                        'output': line.strip(),
-                        'context': text
-                    })
-                    current_q = None
-                    
-        return pairs
-3. نظام التوزيع على الملفات (File-to-Expert Mapping)
-3.1 إنشاء خبراء متخصصين لكل مجلد
-Python
-Copy
-# training/directory_trainer.py
-from pathlib import Path
-import json
-
-class DirectoryBasedTraining:
-    """
-    يدرب خبيراً لكل مجلد من المجلدات:
-    /data/medical/ → خبير طبي
-    /data/legal/   → خبير قانوني
-    """
-    
-    def __init__(self, root_dir: Path):
-        self.root_dir = Path(root_dir)
-        self.processor = LocalDocumentProcessor()
-        self.chunker = ExpertChunkingStrategy()
-        self.trainer = LocalFileTrainer()
-        
-    def train_all_directories(self):
-        """
-        يمر على كل مجلد ويدرب خبيراً له
-        """
-        results = []
-        
-        for domain_dir in self.root_dir.iterdir():
-            if domain_dir.is_dir():
-                print(f"Training expert for domain: {domain_dir.name}")
-                
-                # 1. جمع كل الملفات في هذا المجلد
-                files = list(domain_dir.rglob('*'))
-                documents = []
-                
-                for file in files:
-                    if file.suffix in ['.pdf', '.txt', '.docx']:
-                        try:
-                            doc = self.processor.process_file(file)
-                            documents.append(doc)
-                        except Exception as e:
-                            print(f"Error processing {file}: {e}")
-                            
-                # 2. تقطيع المحتوى
-                chunks = self.chunker.create_semantic_chunks(documents)
-                
-                # 3. تدريب خبير لهذا المجال
-                expert_path = self.trainer.train_expert(
-                    chunks=chunks,
-                    expert_id=domain_dir.name,
-                    output_dir=f"./models/experts/{domain_dir.name}"
-                )
-                
-                results.append({
-                    'domain': domain_dir.name,
-                    'expert_path': expert_path,
-                    'num_files': len(files),
-                    'num_chunks': len(chunks)
-                })
-                
-        # حفظ خريطة الخبراء
-        with open('./models/expert_registry.json', 'w', encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-            
-        return results
-4. سكربت التشغيل الكامل (One-Click Training Script)
-Python
-Copy
-#!/usr/bin/env python3
-# train_from_files.py
-
-"""
-سكربت التدريب الشامل من الملفات المحلية
-استخدام: python train_from_files.py --data-dir ./my_documents --output ./my_asm_model
-"""
-
-import argparse
-import torch
-from pathlib import Path
-
-def main():
-    parser = argparse.ArgumentParser(description='Train ASM from local files')
-    parser.add_argument('--data-dir', type=str, required=True, help='Directory containing documents')
-    parser.add_argument('--output', type=str, default='./asm_model', help='Output directory')
-    parser.add_argument('--base-model', type=str, default='gpt2', help='Base model to use')
-    parser.add_argument('--use-teacher', action='store_true', help='Use local LLM as teacher (requires GPU)')
-    
-    args = parser.parse_args()
-    
-    print("🚀 Starting ASM Training from Local Files...")
-    print(f"📁 Data directory: {args.data_dir}")
-    print(f"💾 Output directory: {args.output}")
-    
-    # 1. معالجة الملفات
-    print("\n📄 Step 1: Processing documents...")
-    trainer = DirectoryBasedTraining(Path(args.data_dir))
-    
-    # 2. التدريب
-    print("\n🎓 Step 2: Training experts...")
-    results = trainer.train_all_directories()
-    
-    print(f"\n✅ Training complete! Created {len(results)} experts.")
-    print(f"📊 Registry saved to: {args.output}/expert_registry.json")
-    
-    # 3. بناء الـ Router
-    print("\n🧭 Step 3: Building Router...")
-    # ... (كود بناء Router)
-    
-    print("\n🎉 Your ASM model is ready!")
-    print(f"Run it with: ./asm_core --model {args.output}")
-
-if __name__ == "__main__":
-    main()
-📋 متطلبات التشغيل على جهازك
-للتدريب الخفيف (CPU فقط):
-bash
-Copy
-pip install torch transformers peft PyMuPDF python-docx sentence-transformers
-# يدرب 1 خبير في 30 دقيقة على CPU عادي
-للتدريب السريع (GPU):
-bash
-Copy
-pip install torch transformers peft accelerate bitsandbytes
-# يدرب 1 خبير في 2 دقيقة على RTX 3060
-للـ Teacher Model (اختياري):
-bash
-Copy
+    // ... باقي الكود ...
+}
+📋 قائمة التعديلات المطلوبة الآن
+Table
+الملف	السطر	التعديل
+memory_manager.cpp	78, 145	إضافة RAM Guard قبل الإضافة
+router.h	32	تغيير float[50000][128] إلى vector
+router.cpp	15	إضافة reserve(50000)
+async_loader.cpp	40, 55	استبدال sleep_for بـ yield
+router.cpp	110	إضافة RouterCache lookup
+asm_format.h	40	تنفيذ calculate_crc32
+context_protocol.h	58	إضافة مصفوفات الترجمة الحقيقية
