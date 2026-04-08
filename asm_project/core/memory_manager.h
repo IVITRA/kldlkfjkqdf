@@ -89,6 +89,12 @@ public:
     // Background eviction (يشتغل في Thread منفصل)
     void evict_lru_if_needed();
     
+    // Internal helper for LRU eviction (must be called with lock held)
+    void evict_lru_expert();
+    
+    // Prefetch experts in background before they're needed
+    void prefetch_experts(const std::vector<std::string>& expert_ids);
+    
     // Get statistics
     size_t get_hot_cache_size() const;
     size_t get_current_ram_usage() const;

@@ -112,28 +112,33 @@ std::shared_ptr<HotExpert> HierarchicalMemoryManager::load_blocking(const std::s
         return nullptr;
     }
     
-    // Add to cache
+    // Calculate expert size
+    size_t expert_size = expert->weights_q4.size() + expert->scales.size() * sizeof(float);
+    
+    // CRITICAL FIX #1: RAM Guard - Check if expert fits in RAM limit
+    if (expert_size > MAX_RAM_USAGE) {
+        std::cerr << "❌ Expert too large for RAM limit: " << expert_size << " bytes" << std::endl;
+        return nullptr;
+    }
+    
+    // Add to cache with RAM Guard
     {
         std::unique_lock<std::shared_mutex> lock(cache_mutex);
         
-        // Evict if needed
+        // CRITICAL: Evict LRU experts until we have enough RAM
+        while (current_ram_usage + expert_size > MAX_RAM_USAGE && !lru_list.empty()) {
+            evict_lru_expert(); // Immediate eviction if memory is full
+        }
+        
+        // Also respect MAX_HOT_EXPERTS limit
         while (hot_cache.size() >= MAX_HOT_EXPERTS && !lru_list.empty()) {
-            std::string lru_id = lru_list.back();
-            lru_list.pop_back();
-            
-            auto it = hot_cache.find(lru_id);
-            if (it != hot_cache.end()) {
-                current_ram_usage -= it->second.first->weights_q4.size();
-                current_ram_usage -= it->second.first->scales.size() * sizeof(float);
-                hot_cache.erase(it);
-            }
+            evict_lru_expert();
         }
         
         // Add new expert
         lru_list.push_front(expert_id);
         hot_cache[expert_id] = {expert, lru_list.begin()};
-        current_ram_usage += expert->weights_q4.size();
-        current_ram_usage += expert->scales.size() * sizeof(float);
+        current_ram_usage += expert_size;
     }
     
     return expert;
@@ -144,15 +149,22 @@ void HierarchicalMemoryManager::evict_lru_if_needed() {
     
     while ((hot_cache.size() > MAX_HOT_EXPERTS || current_ram_usage > MAX_RAM_USAGE) 
            && !lru_list.empty()) {
-        std::string lru_id = lru_list.back();
-        lru_list.pop_back();
-        
-        auto it = hot_cache.find(lru_id);
-        if (it != hot_cache.end()) {
-            current_ram_usage -= it->second.first->weights_q4.size();
-            current_ram_usage -= it->second.first->scales.size() * sizeof(float);
-            hot_cache.erase(it);
-        }
+        evict_lru_expert();
+    }
+}
+
+void HierarchicalMemoryManager::evict_lru_expert() {
+    // Must be called with lock already held
+    if (lru_list.empty()) return;
+    
+    std::string lru_id = lru_list.back();
+    lru_list.pop_back();
+    
+    auto it = hot_cache.find(lru_id);
+    if (it != hot_cache.end()) {
+        current_ram_usage -= it->second.first->weights_q4.size();
+        current_ram_usage -= it->second.first->scales.size() * sizeof(float);
+        hot_cache.erase(it);
     }
 }
 
@@ -183,28 +195,34 @@ void HierarchicalMemoryManager::decompress_worker(std::shared_ptr<LoadTicket> ti
         
         ticket->progress = 0.8f;
         
-        // Add to cache
+        // CRITICAL FIX #1: Add to cache with RAM Guard
         {
             std::unique_lock<std::shared_mutex> lock(cache_mutex);
             
-            // Evict if needed
+            // Calculate expert size
+            size_t expert_size = expert->weights_q4.size() + expert->scales.size() * sizeof(float);
+            
+            // Check if expert fits in RAM
+            if (expert_size > MAX_RAM_USAGE) {
+                std::cerr << "Expert too large for RAM limit!" << std::endl;
+                ticket->progress = 0.0f;
+                return;
+            }
+            
+            // Evict LRU experts until we have enough RAM
+            while (current_ram_usage + expert_size > MAX_RAM_USAGE && !lru_list.empty()) {
+                evict_lru_expert();
+            }
+            
+            // Also respect MAX_HOT_EXPERTS limit
             while (hot_cache.size() >= MAX_HOT_EXPERTS && !lru_list.empty()) {
-                std::string lru_id = lru_list.back();
-                lru_list.pop_back();
-                
-                auto it = hot_cache.find(lru_id);
-                if (it != hot_cache.end()) {
-                    current_ram_usage -= it->second.first->weights_q4.size();
-                    current_ram_usage -= it->second.first->scales.size() * sizeof(float);
-                    hot_cache.erase(it);
-                }
+                evict_lru_expert();
             }
             
             ticket->target = expert;
             lru_list.push_front(ticket->expert_id);
             hot_cache[ticket->expert_id] = {expert, lru_list.begin()};
-            current_ram_usage += expert->weights_q4.size();
-            current_ram_usage += expert->scales.size() * sizeof(float);
+            current_ram_usage += expert_size;
         }
         
         ticket->progress = 1.0f;
@@ -280,6 +298,17 @@ std::shared_ptr<HotExpert> HierarchicalMemoryManager::load_from_disk(const std::
     expert->is_decompressing = false;
     
     return expert;
+}
+
+// CRITICAL FIX #7: Prefetching - Load experts in background before they're needed
+void HierarchicalMemoryManager::prefetch_experts(const std::vector<std::string>& expert_ids) {
+    for (const auto& id : expert_ids) {
+        // Check if already in cache
+        if (!get_if_available(id)) {
+            // Request async load without waiting
+            request_load_async(id);
+        }
+    }
 }
 
 } // namespace asm_core

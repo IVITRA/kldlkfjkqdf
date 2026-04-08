@@ -15,12 +15,15 @@ void HierarchicalRouter::build_graph(const std::vector<std::array<float, 128>>& 
         return;
     }
     
+    // CRITICAL FIX #2: Reserve memory for centroids (dynamic vector)
+    centroids_linear.reserve(num_experts);
+    centroids_linear.resize(num_experts);
+    
     // Copy centroids to linear array for SIMD
     for (size_t i = 0; i < num_experts; ++i) {
         nodes[i].expert_id = static_cast<uint32_t>(i);
         nodes[i].centroid = expert_centroids[i];
-        std::memcpy(centroids_linear[i], expert_centroids[i].data(), 
-                   sizeof(float) * 128);
+        centroids_linear[i] = expert_centroids[i];
         
         // Random layer assignment (exponential distribution)
         double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng);

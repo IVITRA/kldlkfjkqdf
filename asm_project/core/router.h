@@ -29,8 +29,10 @@ struct HNSWNode {
 
 class HierarchicalRouter {
 private:
-    // جميع الـ Centroids مُرتبة في memory contiguous للـ SIMD
-    alignas(64) float centroids_linear[50000][128]; // 25.6 MB (يكفي في L3 Cache!)
+    // CRITICAL FIX #2: Dynamic vector instead of static array (saves RAM!)
+    // Previously: alignas(64) float centroids_linear[50000][128]; // 25.6 MB ALWAYS
+    // Now: Only uses memory for actual number of experts
+    alignas(64) std::vector<std::array<float, 128>> centroids_linear;
     
     // الـ Graph
     std::vector<HNSWNode> nodes;
