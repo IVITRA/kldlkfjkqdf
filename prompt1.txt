@@ -1,0 +1,547 @@
+إليك بناء "العامل الذكي المتجول" (The Curious Web Agent) - نظام يجعل ASM يستيقظ كل صباح وأكثر ذكاءً مما كان عليه بالأمس:
+1. نظام البحث والاستكشاف (The Curious Agent)
+1.1 محرك البحث المتكامل (Search Orchestrator)
+cpp
+Copy
+// core/web_agent/search_orchestrator.h
+#pragma once
+#include <string>
+#include <vector>
+#include <future>
+#include <curl/curl.h> // libcurl للـ HTTP
+#include <nlohmann/json.hpp>
+
+namespace asm_web {
+
+struct SearchQuery {
+    std::string original_question;
+    std::vector<std::string> extracted_keywords;
+    std::string domain_hint; // "programming", "history", "religion", إلخ
+    bool requires_realtime;  // هل يحتاج أخبار/أسعار حالية؟
+};
+
+struct WebResult {
+    std::string url;
+    std::string title;
+    std::string snippet;
+    float credibility_score; // 0.0 - 1.0 (تقييم مصداقية المصدر)
+    std::string content_type; // "article", "documentation", "forum", "video_transcript"
+    std::chrono::timestamp fetch_time;
+};
+
+class CuriousSearchAgent {
+private:
+    // محركات بحث متعددة للتغطية القصوى
+    std::vector<std::string> search_engines = {
+        "https://duckduckgo.com/html/?q=",  // خصوصية
+        "https://search.brave.com/search?q=", // بدون تتبع
+        "https://api.bing.microsoft.com/v7.0/search" // إذا كان لديك مفتاح
+    };
+    
+    // Cache للـ Recent Searches (لا تبحث عن نفس الشيئ مرتين في اليوم)
+    LRUCache<std::string, std::vector<WebResult>> search_cache{1000};
+
+public:
+    // يقرر هل يحتاج للبحث أم لا
+    bool should_search_online(const ContextPassport& passport, float confidence_threshold = 0.6) {
+        if (passport.confidence < confidence_threshold) return true;
+        
+        // إذا كان السؤال يحتوي على كلمات زمنية حديثة
+        if (contains_temporal_markers(passport.original_query)) return true;
+        
+        return false;
+    }
+    
+    // البحث المتزامن في عدة محركات
+    std::vector<WebResult> search_parallel(const SearchQuery& query) {
+        // التحقق من الـ Cache أولاً
+        if (auto cached = search_cache.get(query.original_question)) {
+            return *cached;
+        }
+        
+        std::vector<std::future<std::vector<WebResult>>> futures;
+        
+        for (const auto& engine : search_engines) {
+            futures.push_back(std::async(std::launch::async, [&]() {
+                return query_single_engine(engine, query);
+            }));
+        }
+        
+        // دمج النتائج وإزالة التكرار
+        std::vector<WebResult> all_results;
+        for (auto& f : futures) {
+            auto res = f.get();
+            all_results.insert(all_results.end(), res.begin(), res.end());
+        }
+        
+        // ترتيب حسب المصداقية
+        std::sort(all_results.begin(), all_results.end(), 
+                 [](const auto& a, const auto& b) {
+                     return a.credibility_score > b.credibility_score;
+                 });
+        
+        search_cache.put(query.original_question, all_results);
+        return all_results;
+    }
+    
+private:
+    std::vector<WebResult> query_single_engine(const std::string& engine_url, 
+                                              const SearchQuery& query);
+    bool contains_temporal_markers(const std::string& text);
+};
+
+} // namespace asm_web
+1.2 العنكبوت الذكي (The Smart Scraper)
+cpp
+Copy
+// core/web_agent/smart_scraper.h
+#include <htmlcxx/html/ParserDom.h>
+#include <readability/Readability.h> // مكتبة استخراج المحتوى الرئيسي
+
+namespace asm_web {
+
+class AdaptiveScraper {
+public:
+    struct ScrapedContent {
+        std::string title;
+        std::string main_text; // المحتوى الرئيسي فقط (بدون إعلانات/قوائم)
+        std::vector<std::string> headings; // هيكل المقال
+        std::vector<std::string> links; // روابط للتعمق (follow-up)
+        std::string author;
+        std::string publish_date;
+        float content_quality; // درجة الجودة (للتصفية)
+    };
+    
+    ScrapedContent scrape(const std::string& url) {
+        // 1. جلب الصفحة بـ CURL
+        std::string html = fetch_url(url);
+        
+        // 2. استخراج المحتوى الرئيسي (Readability algorithm)
+        Readability readability(html);
+        std::string clean_text = readability.parse();
+        
+        // 3. تحليل الهيكل (العناوين، الفقرات)
+        auto structure = analyze_structure(html);
+        
+        // 4. تقييم الجودة (هل هو spam؟)
+        float quality = assess_quality(clean_text, structure);
+        
+        return {
+            .main_text = clean_text,
+            .headings = structure.headings,
+            .content_quality = quality
+        };
+    }
+    
+private:
+    float assess_quality(const std::string& text, const Structure& structure) {
+        // معايير الجودة:
+        // - طول مناسب (لا قصير جداً، لا طويل جداً)
+        // - وجود مصادر/روابط
+        // - لغة سليمة (لا أخطاء نحوية كثيرة)
+        // - كثافة المعلومات (نسبة الكلمات المفيدة/الكلمات الكلية)
+        
+        float score = 0.0;
+        if (text.length() > 1000 && text.length() < 50000) score += 0.3;
+        if (structure.headings.size() >= 3) score += 0.2; // هيكل واضح
+        if (contains_citations(text)) score += 0.3; // يستشهد بمصادر
+        if (language_quality_score(text) > 0.8) score += 0.2;
+        
+        return score;
+    }
+};
+
+} // namespace asm_web
+2. نظام التعلم الذاتي (Self-Learning Engine)
+2.1 معالجة المعرفة الواردة (Knowledge Ingestion)
+Python
+Copy
+# training/self_learning/knowledge_ingestor.py
+import hashlib
+from datetime import datetime
+from typing import List, Dict
+import numpy as np
+
+class KnowledgeIngestor:
+    """
+    يأخذ المحتوى المستخرج من الويب ويحوله إلى معرفة قابلة للتدريب
+    """
+    
+    def __init__(self):
+        self.processed_urls = set()  # لتجنب التكرار
+        self.knowledge_base = []     # قاعدة المعرفة المؤقتة
+        
+    def ingest_web_content(self, scraped: Dict, query_context: str) -> List[Dict]:
+        """
+        يعالج المحتوى المستخرج ويحوله إلى training samples
+        """
+        # 1. تجزئة المحتوى إلى "حقائق" صغيرة (Atomic Facts)
+        facts = self.extract_atomic_facts(scraped['main_text'])
+        
+        training_samples = []
+        for fact in facts:
+            # 2. توليد أسئلة محتملة لهذه الحقيقة (Self-Questioning)
+            questions = self.generate_questions(fact, scraped['headings'])
+            
+            for q in questions:
+                sample = {
+                    'input': q,
+                    'output': fact,
+                    'source': scraped['url'],
+                    'source_credibility': scraped['credibility_score'],
+                    'domain': self.detect_domain(fact),
+                    'timestamp': datetime.now(),
+                    'context_hash': hashlib.md5(query_context.encode()).hexdigest()
+                }
+                training_samples.append(sample)
+                
+        return training_samples
+    
+    def extract_atomic_facts(self, text: str) -> List[str]:
+        """
+        يقسم النص إلى جمل منفردة تحمل معنى كاملاً
+        """
+        # استخدام NLP لتحديد الحدود المنطقية
+        import spacy
+        nlp = spacy.load("xx_ent_wiki_sm")  # متعدد اللغات
+        
+        doc = nlp(text)
+        facts = []
+        
+        for sent in doc.sents:
+            # فقط الجمل التي تحتوي على معلومة جديدة (ليست مجرد تعبير رأي)
+            if self.is_informative(sent):
+                facts.append(str(sent).strip())
+                
+        return facts
+    
+    def generate_questions(self, fact: str, headings: List[str]) -> List[str]:
+        """
+        يولد أسئلة متنوعة للحقيقة (لزيادة مرونة التعلم)
+        """
+        # استخدام نموذج صغير لتوليد أسئلة (Question Generation)
+        from transformers import pipeline
+        
+        qg = pipeline("text2text-generation", model="mrm8488/t5-base-finetuned-question-generation-ap")
+        
+        context = " ".join(headings[:2]) + " " + fact  # السياق من العناوين
+        
+        # توليد 3 أنواع من الأسئلة
+        questions = [
+            qg(f"generate question: {context}")[0]['generated_text'],
+            qg(f"ask about: {fact}")[0]['generated_text'],
+            qg(f"what is: {fact.split()[0]}")[0]['generated_text']  # سؤال عن الموضوع الرئيسي
+        ]
+        
+        return list(set(questions))  # إزالة التكرار
+2.2 التدريب التزايدي (Incremental Learning) - عدم النسيان!
+Python
+Copy
+# training/self_learning/incremental_trainer.py
+import torch
+from torch.utils.data import DataLoader, Dataset
+import copy
+
+class IncrementalExpertTrainer:
+    """
+    يُحدث الخبير بالمعرفة الجديدة دون نسيان القديم (Catastrophic Forgetting Prevention)
+    """
+    
+    def __init__(self, expert_model, replay_buffer_size=1000):
+        self.model = expert_model
+        self.replay_buffer = []  # ذاكرة القديم (Old Knowledge Replay)
+        self.buffer_size = replay_buffer_size
+        
+    def update_with_new_knowledge(self, new_samples: List[Dict], domain: str):
+        """
+        يُضيف معرفة جديدة للخبير
+        """
+        # 1. حفظ نسخة من النموذج القديم (للـ Regularization)
+        old_model = copy.deepcopy(self.model)
+        old_model.eval()
+        
+        # 2. دمج البيانات الجديدة مع الـ Replay Buffer (القديم)
+        combined_data = new_samples + self.replay_buffer
+        
+        # 3. التدريب المختلط (New + Old)
+        dataset = KnowledgeDataset(combined_data)
+        loader = DataLoader(dataset, batch_size=4, shuffle=True)
+        
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-5)  # LR منخفض جداً
+        
+        for epoch in range(2):  # epochs قليلة للتحديث السريع
+            for batch in loader:
+                # Loss على البيانات الجديدة
+                new_loss = compute_loss(self.model, batch)
+                
+                # Loss على "القديم" (Knowledge Distillation من النسخة القديمة)
+                # هذا يمنع النسيان!
+                if self.replay_buffer:
+                    with torch.no_grad():
+                        old_outputs = old_model(batch['input'])
+                    new_outputs = self.model(batch['input'])
+                    distillation_loss = kl_divergence(new_outputs, old_outputs)
+                else:
+                    distillation_loss = 0
+                
+                total_loss = new_loss + 0.5 * distillation_loss
+                
+                optimizer.zero_grad()
+                total_loss.backward()
+                optimizer.step()
+        
+        # 4. تحديث الـ Replay Buffer بالعينات الجديدة المهمة
+        self._update_replay_buffer(new_samples)
+        
+        # 5. تحديث الـ Router (إذا كان الموضوع جديداً)
+        if self.is_new_domain(domain):
+            self._update_router_embeddings(domain, new_samples)
+    
+    def _update_replay_buffer(self, new_samples):
+        """
+        يحتفظ بعينات ممثلة من القديم (Experience Replay)
+        """
+        # إضافة بعض العينات الجديدة
+        self.replay_buffer.extend(new_samples[:100])
+        
+        # إذا تجاوز الحد، أزل الأقدم
+        if len(self.replay_buffer) > self.buffer_size:
+            self.replay_buffer = self.replay_buffer[-self.buffer_size:]
+    
+    def is_new_domain(self, domain: str) -> bool:
+        """
+        يتحقق إذا كان هذا المجال جديداً على الخبير
+        """
+        # مقارنة embedding المجال مع الـ centroids المعروفة
+        return self.model.domain_similarity(domain) < 0.7
+3. نظام التكيف الديناميكي (Dynamic Adaptation System)
+3.1 اكتشاف نقص المعرفة (Knowledge Gap Detection)
+cpp
+Copy
+// core/self_learning/gap_detector.h
+namespace asm_learning {
+
+class KnowledgeGapDetector {
+public:
+    struct KnowledgeGap {
+        std::string missing_concept;
+        float certainty_of_ignorance; // 0.0 = ربما نعرف، 1.0 = متأكد أننا لا نعرف
+        std::string suggested_search_query;
+        std::vector<std::string> related_experts_that_might_know;
+    };
+    
+    // يحلل الـ Passport ويجد الثغرات
+    std::vector<KnowledgeGap> detect_gaps(const ContextPassport& passport, 
+                                         const std::vector<ExpertOutput>& expert_responses) {
+        std::vector<KnowledgeGap> gaps;
+        
+        // 1. إذا كان الـ confidence منخفضاً في مجال معين
+        for (const auto& response : expert_responses) {
+            if (response.passport.confidence < 0.5) {
+                gaps.push_back({
+                    .missing_concept = extract_topic(response.passport.intent),
+                    .certainty_of_ignorance = 1.0 - response.passport.confidence,
+                    .suggested_search_query = generate_search_query(response),
+                    .related_experts = find_related_domains(response.passport)
+                });
+            }
+        }
+        
+        // 2. الكشف عن "الهلوسة" (Hallucination Detection)
+        // إذا خبيران يعطيان إجابتين متعارضتين → هناك gap في المعرفة
+        auto contradictions = find_contradictions(expert_responses);
+        for (const auto& conflict : contradictions) {
+            gaps.push_back({
+                .missing_concept = conflict.topic,
+                .certainty_of_ignorance = 0.8,
+                .suggested_search_query = "clarify: " + conflict.topic
+            });
+        }
+        
+        return gaps;
+    }
+    
+    // يقرر: هل نبحث الآن، أم ننتظر، أم نسأل المستخدم؟
+    SearchDecision decide_action(const std::vector<KnowledgeGap>& gaps) {
+        float total_urgency = 0;
+        for (const auto& gap : gaps) {
+            total_urgency += gap.certainty_of_ignorance;
+        }
+        
+        if (total_urgency > 2.0) { // عدة ثغرات كبيرة
+            return SearchDecision::SEARCH_NOW;
+        } else if (total_urgency > 0.5) {
+            return SearchDecision::SCHEDULE_BACKGROUND; // ابحث لاحقاً في الخلفية
+        }
+        return SearchDecision::NO_ACTION_NEEDED;
+    }
+};
+
+} // namespace asm_learning
+3.2 التعلم في الخلفية (Background Learning Daemon)
+Python
+Copy
+# training/self_learning/background_learner.py
+import schedule
+import time
+from threading import Thread
+
+class BackgroundLearningDaemon:
+    """
+    عفريت يعمل في الخلفية (24/7) يتعلم ويحسن النظام
+    """
+    
+    def __init__(self, asm_system):
+        self.asm = asm_system
+        self.learning_queue = []  # مواضيع للتعلم
+        self.running = False
+        
+    def start(self):
+        """يبدأ العفريت"""
+        self.running = True
+        
+        # جدولة المهام
+        schedule.every(1).hours.do(self.hourly_learning_session)
+        schedule.every().day.at("03:00").do(self.daily_deep_learning)
+        schedule.every().sunday.do(self.weekly_consolidation)
+        
+        Thread(target=self._run_scheduler, daemon=True).start()
+    
+    def hourly_learning_session(self):
+        """
+        كل ساعة: راجع الأسئلة التي لم تُجب عنها جيداً وابحث عنها
+        """
+        recent_failures = self.asm.get_recent_low_confidence_queries(hours=1)
+        
+        for query in recent_failures:
+            # ابحث وتعلم
+            search_results = self.asm.web_agent.search(query)
+            knowledge = self.asm.ingestor.ingest_web_content(search_results[0], query)
+            self.asm.incremental_trainer.update_with_new_knowledge(knowledge, query.domain)
+    
+    def daily_deep_learning(self):
+        """
+        كل يوم الساعة 3 فجراً: تعلم عميق على موضوع عشوائي للتوسع
+        """
+        # اختر موضوع عشوائي من " trending topics" أو "knowledge frontier"
+        topic = self.select_expansion_topic()
+        
+        print(f"🔬 Deep Learning on: {topic}")
+        
+        # ابحث بعمق (10-20 صفحة)
+        deep_results = self.asm.web_agent.deep_search(topic, depth=3)
+        
+        for result in deep_results:
+            knowledge = self.asm.ingestor.ingest_web_content(result, topic)
+            self.asm.incremental_trainer.update_with_new_knowledge(knowledge, topic)
+    
+    def weekly_consolidation(self):
+        """
+        كل أسبوع: دمج المعرفة المتشظية وإعادة تدريب الـ Router
+        """
+        # 1. إعادة بناء الـ HNSW Router بناءً على الخبراء المُحدثين
+        self.asm.router.rebuild_index()
+        
+        # 2. تنظيف الـ Cache القديم
+        self.asm.search_cache.clear_old_entries(days=7)
+        
+        # 3. حفظ نسخة احتياطية من النموذج المُحسن
+        self.asm.checkpoint("weekly_backup")
+4. إدارة المصداقية والأمان (Trust & Safety)
+4.1 فلترة المصادر (Source Filtering)
+Python
+Copy
+# training/self_learning/source_validator.py
+
+class SourceValidator:
+    """
+    يتحقق من مصداقية المصادر قبل التعلم منها
+    """
+    
+    TRUSTED_DOMAINS = {
+        'wikipedia.org': 0.8,
+        'github.com': 0.9,      # للبرمجة
+        'stackoverflow.com': 0.85,
+        'islamweb.net': 0.9,    # للمحتوى الديني الإسلامي
+        'aljazeera.net': 0.8,   # أخبار
+        'nature.com': 0.95,     # علوم
+        'arxiv.org': 0.9,       # أبحاث
+    }
+    
+    UNTRUSTED_PATTERNS = [
+        'forum', 'blogspot', 'wordpress', 'wix',  # قد تكون شخصية غير موثقة
+        'clickbait', 'ad', 'promo'
+    ]
+    
+    def validate(self, url: str, content: str) -> float:
+        """
+        يرجع درجة الثقة (0.0 - 1.0)
+        """
+        score = 0.5  # محايد افتراضياً
+        
+        # 1. فحص Domain
+        domain = extract_domain(url)
+        if domain in self.TRUSTED_DOMAINS:
+            score = self.TRUSTED_DOMAINS[domain]
+        elif any(pattern in domain for pattern in self.UNTRUSTED_PATTERNS):
+            score -= 0.3
+        
+        # 2. فحص المحتوى (هل هو هلوسة؟)
+        if self.contains_conspiracy_language(content):
+            score -= 0.4
+        
+        # 3. فحص التاريخ (هل المحتوى قديم؟)
+        if self.is_outdated(content):
+            score -= 0.2
+            
+        return max(0.0, min(1.0, score))
+    
+    def contains_conspiracy_language(self, text: str) -> bool:
+        """
+        كشف اللغة المبالغ فيها أو نظريات المؤامرة (للأخبار مثلاً)
+        """
+        red_flags = [
+            "سر كبير لا يعرفه أحد", "المؤسسة تخفي", "الحقيقة المغيبة",
+            "معجزة", "خدعة كبرى", "they don't want you to know"
+        ]
+        return any(flag in text.lower() for flag in red_flags)
+5. سيناريو التشغيل الكامل (Usage Flow)
+Mermaid
+Fullscreen 
+Download 
+Copy
+Code
+Preview
+Expert
+Ingestor
+WebAgent
+Router
+ASM
+User
+Expert
+Ingestor
+WebAgent
+Router
+ASM
+User
+في الخلفية (3 صباحاً)
+"ما هو أحدث إصدار من لعبة Elden Ring؟"
+تحليل السؤال
+confidence: 0.3 (منخفض - الموضوع جديد)
+search("Elden Ring latest version 2026")
+5 نتائج (FromSoftware، Steam، IGN)
+استخرج الحقائق
+"الإصدار 1.12 صدر بتاريخ..."
+تدريب تزايدي بهذه المعلومة
+تم التحديث (بدون نسيان القديم)
+"الإصدار الأخير هو 1.12 ويضمن..."
+deep_search("Elden Ring lore")
+تعلم عميق إضافي
+6. الأوامر الخاصة للمستخدم (Special Commands)
+يمكن للمستخدم التحكم في التعلم:
+plain
+Copy
+!تعلم من [رابط] - يجبر النظام على قراءة صفحة معينة
+!نسيان [موضوع] - يمحو معرفة خاطئة (مع تأكيد)
+! freeze - يوقف التعلم مؤقتاً (للحفاظ على الثبات)
+! status - يعرض إحصائيات: كم صفحة قرأ اليوم؟ كم خبير تعلم شيئاً جديداً؟
