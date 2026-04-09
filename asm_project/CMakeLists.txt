@@ -66,6 +66,7 @@ add_executable(asm_core
 target_include_directories(asm_core PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/web_agent
     ${CMAKE_CURRENT_SOURCE_DIR}/formats
 )
 
@@ -93,6 +94,7 @@ add_executable(asm_tests
 target_include_directories(asm_tests PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/web_agent
     ${CMAKE_CURRENT_SOURCE_DIR}/formats
 )
 

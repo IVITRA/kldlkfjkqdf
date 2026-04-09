@@ -50,6 +50,14 @@ private:
                                   const ThoughtPassport& context,
                                   const std::string& input);
     
+    // Neural Network Helper Functions
+    std::vector<float> tokenize_input(const std::string& text);
+    std::vector<float> forward_pass(const uint8_t* weights_q4, const float* scales,
+                                   const std::vector<float>& input, size_t weight_size);
+    std::string decode_output(const std::vector<float>& hidden_state, 
+                             const ThoughtPassport& context);
+    float calculate_confidence(const std::vector<float>& hidden_state);
+    
     // Worker thread function
     void worker_thread();
 };
