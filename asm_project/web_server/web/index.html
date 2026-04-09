@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASM - Adaptive Sparse Mind</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <h1>🧠 ASM</h1>
+                    <p class="subtitle">Adaptive Sparse Mind</p>
+                </div>
+                <nav class="nav">
+                    <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
+                    <button class="nav-btn" data-tab="upload">Upload Files</button>
+                    <button class="nav-btn" data-tab="training">Training</button>
+                    <button class="nav-btn" data-tab="chat">Chat</button>
+                    <button class="nav-btn" data-tab="experts">Experts</button>
+                    <button class="nav-btn" data-tab="learning">Self-Learning</button>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+        <div class="container">
+            <!-- Dashboard Tab -->
+            <section id="dashboard" class="tab-content active">
+                <h2>System Dashboard</h2>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">💻</div>
+                        <div class="stat-info">
+                            <h3>CPU Usage</h3>
+                            <p class="stat-value" id="cpu-usage">--%</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon">🧠</div>
+                        <div class="stat-info">
+                            <h3>Memory</h3>
+                            <p class="stat-value" id="memory-usage">-- GB</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon">💾</div>
+                        <div class="stat-info">
+                            <h3>Disk</h3>
+                            <p class="stat-value" id="disk-usage">--%</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon">📚</div>
+                        <div class="stat-info">
+                            <h3>Experts</h3>
+                            <p class="stat-value" id="experts-count">--</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon">📄</div>
+                        <div class="stat-info">
+                            <h3>Files</h3>
+                            <p class="stat-value" id="files-count">--</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon">🎓</div>
+                        <div class="stat-info">
+                            <h3>Learning</h3>
+                            <p class="stat-value" id="learning-status">--</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>System Status</h3>
+                    <div id="system-status" class="status-display">
+                        <p>Loading...</p>
+                    </div>
+                    <button class="btn btn-primary" onclick="refreshStatus()">🔄 Refresh Status</button>
+                </div>
+            </section>
+
+            <!-- Upload Files Tab -->
+            <section id="upload" class="tab-content">
+                <h2>Upload Documents</h2>
+                
+                <div class="card">
+                    <h3>File Upload</h3>
+                    
+                    <div class="upload-zone" id="upload-zone">
+                        <div class="upload-icon">📤</div>
+                        <p>Drag & drop files here or click to browse</p>
+                        <p class="upload-hint">Supports: PDF, TXT, DOCX, MD, CSV</p>
+                        <input type="file" id="file-input" multiple accept=".pdf,.txt,.docx,.md,.csv" hidden>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="upload-domain">Domain:</label>
+                        <select id="upload-domain">
+                            <option value="general">General</option>
+                            <option value="medical">Medical</option>
+                            <option value="legal">Legal</option>
+                            <option value="science">Science</option>
+                            <option value="technology">Technology</option>
+                            <option value="history">History</option>
+                            <option value="philosophy">Philosophy</option>
+                        </select>
+                    </div>
+                    
+                    <div id="file-list" class="file-list"></div>
+                    
+                    <button class="btn btn-primary" id="upload-btn" onclick="uploadFiles()" disabled>
+                        📤 Upload Files
+                    </button>
+                </div>
+                
+                <div class="card">
+                    <h3>Uploaded Files</h3>
+                    <button class="btn btn-secondary" onclick="loadFiles()">🔄 Load Files</button>
+                    <div id="uploaded-files-list" class="files-display"></div>
+                </div>
+            </section>
+
+            <!-- Training Tab -->
+            <section id="training" class="tab-content">
+                <h2>Train Experts</h2>
+                
+                <div class="card">
+                    <h3>Training Configuration</h3>
+                    
+                    <div class="form-group">
+                        <label for="training-task">Training Task:</label>
+                        <select id="training-task">
+                            <option value="directory_training">Directory Training (Multi-Expert)</option>
+                            <option value="file_training">Single File Training</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="base-model">Base Model:</label>
+                        <select id="base-model">
+                            <option value="microsoft/DialoGPT-medium">DialoGPT Medium (Recommended)</option>
+                            <option value="microsoft/DialoGPT-small">DialoGPT Small (Faster)</option>
+                            <option value="gpt2">GPT-2</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="output-dir">Output Directory:</label>
+                        <input type="text" id="output-dir" value="./asm_model" placeholder="./asm_model">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="use-teacher">
+                            <span>Use Teacher Model (QA Generation)</span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="use-ocr">
+                            <span>Enable OCR for Images/PDFs</span>
+                        </label>
+                    </div>
+                    
+                    <button class="btn btn-primary" id="start-training-btn" onclick="startTraining()">
+                        🚀 Start Training
+                    </button>
+                </div>
+                
+                <div class="card">
+                    <h3>Training Progress</h3>
+                    <div id="training-progress" class="progress-container">
+                        <div class="progress-bar" id="progress-bar"></div>
+                        <div class="progress-text" id="progress-text">0%</div>
+                    </div>
+                    <p id="training-message" class="training-message">Ready to train</p>
+                    <button class="btn btn-danger" id="cancel-training-btn" onclick="cancelTraining()" style="display: none;">
+                        ❌ Cancel Training
+                    </button>
+                </div>
+            </section>
+
+            <!-- Chat Tab -->
+            <section id="chat" class="tab-content">
+                <h2>Chat with ASM</h2>
+                
+                <div class="chat-container">
+                    <div id="chat-messages" class="chat-messages"></div>
+                    
+                    <div class="chat-input-container">
+                        <div class="form-group">
+                            <select id="chat-domain">
+                                <option value="general">General</option>
+                                <option value="medical">Medical</option>
+                                <option value="legal">Legal</option>
+                                <option value="science">Science</option>
+                                <option value="technology">Technology</option>
+                            </select>
+                        </div>
+                        
+                        <div class="chat-input-wrapper">
+                            <textarea 
+                                id="chat-input" 
+                                placeholder="Type your message..." 
+                                rows="3"
+                                onkeypress="handleChatKeypress(event)"
+                            ></textarea>
+                            <button class="btn btn-primary" onclick="sendMessage()">
+                                📤 Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Experts Tab -->
+            <section id="experts" class="tab-content">
+                <h2>Manage Experts</h2>
+                
+                <div class="card">
+                    <h3>Trained Experts</h3>
+                    <button class="btn btn-secondary" onclick="loadExperts()">🔄 Load Experts</button>
+                    <div id="experts-list" class="experts-display"></div>
+                </div>
+            </section>
+
+            <!-- Self-Learning Tab -->
+            <section id="learning" class="tab-content">
+                <h2>Self-Learning System</h2>
+                
+                <div class="card">
+                    <h3>Background Learning</h3>
+                    <p class="info-text">
+                        The background learner continuously improves ASM by:
+                    </p>
+                    <ul class="feature-list">
+                        <li>📚 Processing failed queries hourly</li>
+                        <li>🔍 Deep learning sessions daily at 3 AM</li>
+                        <li>🧹 Knowledge consolidation weekly</li>
+                        <li>✅ Source validation and credibility checking</li>
+                    </ul>
+                    
+                    <div class="button-group">
+                        <button class="btn btn-primary" id="start-learning-btn" onclick="startLearning()">
+                            🚀 Start Learning
+                        </button>
+                        <button class="btn btn-danger" id="stop-learning-btn" onclick="stopLearning()" style="display: none;">
+                            🛑 Stop Learning
+                        </button>
+                    </div>
+                    
+                    <div id="learning-status-display" class="status-display">
+                        <p>Status: Not running</p>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>Add Failed Query</h3>
+                    <p class="info-text">Add queries that ASM failed to answer for later learning</p>
+                    
+                    <div class="form-group">
+                        <label for="failed-query">Question:</label>
+                        <textarea id="failed-query" rows="3" placeholder="Enter the question ASM couldn't answer..."></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="failed-query-domain">Domain:</label>
+                        <select id="failed-query-domain">
+                            <option value="general">General</option>
+                            <option value="medical">Medical</option>
+                            <option value="legal">Legal</option>
+                            <option value="science">Science</option>
+                            <option value="technology">Technology</option>
+                        </select>
+                    </div>
+                    
+                    <button class="btn btn-primary" onclick="addFailedQuery()">
+                        ➕ Add to Learning Queue
+                    </button>
+                </div>
+                
+                <div class="card">
+                    <h3>Validate Source</h3>
+                    <p class="info-text">Check if a source is credible and trustworthy</p>
+                    
+                    <div class="form-group">
+                        <label for="source-url">URL:</label>
+                        <input type="url" id="source-url" placeholder="https://example.com/article">
+                    </div>
+                    
+                    <button class="btn btn-primary" onclick="validateSource()">
+                        ✅ Validate Source
+                    </button>
+                    
+                    <div id="validation-result" class="validation-result"></div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p>ASM - Adaptive Sparse Mind | 500B Parameters on 4GB RAM</p>
+            <p class="footer-links">
+                <a href="#" onclick="showAbout()">About</a> |
+                <a href="#" onclick="showHelp()">Help</a> |
+                <a href="https://github.com" target="_blank">GitHub</a>
+            </p>
+        </div>
+    </footer>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
